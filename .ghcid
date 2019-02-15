@@ -1,0 +1,1 @@
+--command="stack ghci int-prog:lib --ghci-options=-fobject-code"
