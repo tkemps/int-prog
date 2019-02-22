@@ -107,7 +107,7 @@ data Dir = Maximize | Minimize deriving Show
 -- 6. Introduce artificial variables \(z_j\) ( \(j=1,\ldots,m\) ) for each equation.
 -- This changes the optimization problem and the solver has to take this into account.
 --
--- The function returns a modified and standadized GLP and a matrix \(b\) that maps
+-- The function returns a modified and standardized GLP and a matrix \(b\) that maps
 -- solution vectors (including the objective functions value) of the modified GLP back
 -- to solution vectors of the original GLP.
 standardizeGLP :: GLP -> (GLP, Matrix Double)
@@ -182,6 +182,36 @@ mapCol a k f = runSTMatrix $ do
                     a' <- thawMatrix a
                     forM_ [0..rows a-1] (\i -> modifyMatrix a' i k f)
                     return a'
+
+prettyPrintAsFormulas :: GLP -> String
+prettyPrintAsFormulas glp@GLP{..} =
+    let rs = LA.toRows a
+        m = cols a - 1
+        n = rows a - 1
+        objFun = (show dir)++
+                    " z_0 = "++linExp 0
+        zRows = fmap (\k -> "z_"++show k++" = "++linExp k) [1..n]
+        linExp k = L.intercalate " + " (
+                    L.filter (/= "") $
+                    fmap (\(a,i) ->
+                            if a /= 0
+                            then show a++" x_"++show i
+                            else "") (L.zip (toList $ rs!!k) [0..m]))
+        zNonNeg  = "z_i ≥ 0"
+        xConstr :: I -> Int -> String
+        xConstr ck k = "x_"++show k++if ck == -1
+                                     then " ≤ 0"
+                                     else if ck == 1
+                                          then " ≥ 0"
+                                          else " unconstrained"
+        xConstrs = fmap (uncurry xConstr) (L.zip (toList c) [1..m])
+    in L.intercalate "\n" (
+            objFun:
+            "Subject to":
+            (fmap (\line -> "\t"++line) (zRows++[""]++
+                                         [zNonNeg, ""]++
+                                         xConstrs)))
+            ++"\n"
 
 (Right ex1') = ex1
 ex1 = let a = (5><5)
