@@ -19,6 +19,6 @@ library
   hs-source-dirs:      src
   build-depends:       base >= 4.7 && < 5, array, hmatrix, vector, vector-algorithms,
                        formatting, text, containers, unicode-table, display, bytestring
-  exposed-modules:     Numeric.LP
+  exposed-modules:     Numeric.GLP, Numeric.LP
 
 
