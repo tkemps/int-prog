@@ -21,7 +21,8 @@ import           Numeric.LinearAlgebra       (I, Element, Matrix, Vector, ident,
                                               )
 import qualified Numeric.LinearAlgebra       as LA
 import           Numeric.LinearAlgebra.Devel (modifyMatrix, runSTMatrix,
-                                              thawMatrix, mapVectorWithIndex)
+                                              thawMatrix, mapVectorWithIndex, fi)
+import           Numeric.LinearAlgebra       (vjoin, (|||), (===))
 
 -- | This structure defines a General Linear Problem containing ≤
 -- and ≥ inequalities and == equalities. The sum of the numbers of
@@ -60,15 +61,25 @@ data GLP = GLP {
     c   :: Vector I,      -- ^ Type of constraint for \(x_j\), \(j=1,\ldots,n\),
                           -- see 'GLP' for further details. The element \(c_i\)
                           -- corresponds to column \(i+1\) of the matrix \(a\).
+    n :: Int,             -- ^ Number of original variables \(x_1, \ldots, x_n\)
     m1  :: Int,           -- ^ Number of ≤ inequalities
     m2  :: Int,           -- ^ Number of ≥ inequalities
     m3  :: Int,           -- ^ Number of = equalities
-    dir :: Dir            -- ^ Whether the objective function is to be maximized
+    dir :: Dir,           -- ^ Whether the objective function is to be maximized
                           -- or minimzed
+    lhs, rhs :: Vector I  -- ^ Indices of left and right hand variables respectively.
+                          -- The original variables \x_1,\ldots,x_n\) have indices
+                          -- \(1,\ldots,n\), the slack variables get indices
+                          -- \(n+1, \ldots, n+m_1+m_2+1\), and the auxiliary variables
+                          -- finally get indices \(n+m_1+m_2+2, \ldots, n+m_1+m_2+m+2\).
     } deriving (Show)
 
 -- | This smart constructor checks all the pre-conditions for 'GLP' stated in the
--- description of 'GLP'.
+-- description of 'GLP' and initializes the variables 'lhs' and 'rhs'. Initially only
+-- the \(m\) auxiliary variables \(z_1,\ldots,z_m\) are on the left hand side and all the
+-- original variables \(x_1,\ldots,x_n\) are on the right hand side. Initially there are
+-- no slack variables \(y_1,\ldots,y_{m_1+m_2+1}\). These will be introdced by the function
+-- 'introduceSlackVariables' below.
 mkGLP :: Matrix Double -> Vector I -> (Int, Int, Int) -> Dir -> Either String GLP
 mkGLP a c (m1,m2,m3) dir =
     let m = rows a - 1
@@ -82,8 +93,10 @@ mkGLP a c (m1,m2,m3) dir =
                  else if not (S.fromList (LA.toList c) `isSubsetOf` (S.fromList [-1,0,1]))
                       then Left "Vector c has elements other than -1, 0, +1"
                       else if LA.size c /= n
-                           then error $ "Vector c has not the proper length "++show n
-                           else Right (GLP a c m1 m2 m3 dir)
+                           then Left $ "Vector c has not the proper length "++show n
+                           else Right (GLP a c n m1 m2 m3 dir
+                                           (LA.fromList [fi (n+m1+m2+2)..fi (n+m1+m2+m+2)])
+                                           (LA.fromList [1..fi n]))
 
 data Dir = Maximize | Minimize deriving Show
 
@@ -93,17 +106,17 @@ data Dir = Maximize | Minimize deriving Show
 -- 1. If the objective function is to be minimized multiply it by -1.
 -- 2. Turn around the ≥-inequalities by negation of the corresponding rows. After this
 -- step there are 'm1'+'m2' inequalities of the <= type.
--- 3. For the 'm1'+'m2' ≤-inequalities introduce as many slack variables on the right
--- hand side and make these equalities instead. After this step there are only
--- equalities left as constraints. We do not represent these slack variables in the
--- matrix 'a' and therefore nothing really changes in this step.
--- 4. For those variables \(x_i\) that have a constraint \(x_i \leq 0\) substitute
+-- 3. For those variables \(x_i\) that have a constraint \(x_i \leq 0\) substitute
 -- \(x_i \rightarrow -x_i\). This means multiplying the column \(i\) of the matrix
 -- \(a\) by \(-1\).
--- 5. For those variables \(x_i\) that are unconstrained introduce new non-negative
+-- 4. For those variables \(x_i\) that are unconstrained introduce new non-negative
 -- variables \(x_i = x_i⁺ - x_i⁻\). We give these the indices \(x_i⁺ = x_i\) and
 -- \(x_⁻ = x_{i+1}\). The indices of all other variables \(x_k\), \(k>i\) have to be
 -- increased by \(1\). The matrix \(a\) therefore grows by one column.
+-- 5. For the 'm1'+'m2' ≤-inequalities introduce as many slack variables on the right
+-- hand side and make these equalities instead. After this step there are only
+-- equalities left as constraints. We do not represent these slack variables in the
+-- matrix 'a' and therefore nothing really changes in this step.
 -- 6. Introduce artificial variables \(z_j\) ( \(j=1,\ldots,m\) ) for each equation.
 -- This changes the optimization problem and the solver has to take this into account.
 --
@@ -116,12 +129,13 @@ standardizeGLP glp =
         (glp2, b2) = resolveGeqConstraints glp1
         (glp3, b3) = resolveNonPositiveVars glp2
         (glp4, b4) = resolveUnconstrainedVars glp3
-    in (glp4, b1 <> b2 <> b3 <> b4)
+        glp5 = introduceSlackVariables glp4
+    in (glp5, b1 <> b2 <> b3 <> b4)
 
 resolveMin2Max :: GLP -> (GLP, Matrix Double)
 resolveMin2Max glp@GLP{..} = case dir of
         Maximize -> (glp, ident (1+m1+m2+m3))
-        Minimize -> (glp{a = mapRow a 0 negate},
+        Minimize -> (glp{a = mapRow a 0 negate, dir = Maximize},
                      diagl (-1:(replicate (m1+m2+m3) 1)))
 
 resolveGeqConstraints :: GLP -> (GLP, Matrix Double)
@@ -168,6 +182,16 @@ resolveUnconstrainedVars glp@GLP{..} =
             in (fromColumns columns, fromList cs, fromColumns $ zCol:bs)
     in (glp{a=a', c=c'}, b)
 
+introduceSlackVariables :: GLP -> GLP
+introduceSlackVariables glp@GLP{..} =
+    let m3' = m1+m2+m3
+        n = cols a - 1
+        a' = a ||| ((1><(m1+m2)) (replicate (m1+m2) 0) ===
+                    diagl ((replicate m1 1)++(replicate m2 (-1))) ===
+                    (m3><(m1+m2)) (replicate (m3*(m1+m2)) 0))
+        rhs' = vjoin [rhs, LA.fromList [fi (n+1)..fi (n+1+m1+m2)]]
+    in glp{a=a', m1=0, m2=0, m3=m3', rhs=rhs'}
+
 vec1 :: Int -> Int -> Double -> Vector Double
 vec1 n i x = fromList $ L.replicate i 0++x:L.replicate (n-i-1) 0
 
@@ -195,10 +219,27 @@ prettyPrintAsFormulas glp@GLP{..} =
                     L.filter (/= "") $
                     fmap (\(a,i) ->
                             if a /= 0
-                            then show a++" x_"++show i
+                            then show a++(if i>0 then " "++varName i else "")
                             else "") (L.zip (toList $ rs!!k) [0..m]))
-        zNonNeg  = "z_i ≥ 0"
-        xConstr :: I -> Int -> String
+        varName i = if i <= n then "x_"++show i  else "y_"++show (i-n)
+        zConstr  = L.intercalate ", " $ filter (/= "") $
+                   [if m1 == 1
+                    then "z_1 ≤ 0"
+                    else if m1 == 2
+                         then "z_1, z_2 ≤ 0"
+                         else if m1 > 2
+                              then "z_1, ..., z_"++show m1++" ≤ 0"
+                              else "",
+                    if m2 == 1
+                    then "z_"++show (m1+1)++" ≥ 0"
+                    else if m2 > 1
+                         then "z_"++show (m1+1)++", ..., z_"++show (m1+m2)++" ≥ 0"
+                         else "",
+                    if m3 == 1
+                    then "z_"++show (m1+m2+1)++" = 0"
+                    else if m3 > 1
+                         then "z_"++show (m1+m2+1)++", ..., z_"++show (m1+m2+m3)++" = 0"
+                         else ""]
         xConstr ck k = "x_"++show k++if ck == -1
                                      then " ≤ 0"
                                      else if ck == 1
@@ -209,7 +250,7 @@ prettyPrintAsFormulas glp@GLP{..} =
             objFun:
             "Subject to":
             (fmap (\line -> "\t"++line) (zRows++[""]++
-                                         [zNonNeg, ""]++
+                                         [zConstr, ""]++
                                          xConstrs)))
             ++"\n"
 
@@ -222,3 +263,42 @@ ex1 = let a = (5><5)
                  ,   9,   -1, -1, -1, -1]
           c = LA.fromList [-1, 1, 0, -1]
       in mkGLP a c (2, 1, 1) Minimize
+
+allEx1 = do
+    let g1 = ex1'
+    putStr $ prettyPrintAsFormulas g1
+    putStrLn $ "lhs = "++show (lhs g1)
+    putStrLn $ "rhs = "++show (rhs g1)
+    putStrLn "\nResolve min/max"
+    let (g2, b1) = resolveMin2Max g1
+    putStr $ prettyPrintAsFormulas g2
+    putStrLn $ "lhs = "++show (lhs g2)
+    putStrLn $ "rhs = "++show (rhs g2)
+    print b1
+    putStrLn "\nResove geq constraints"
+    let (g3, b2) = resolveGeqConstraints g2
+    putStr $ prettyPrintAsFormulas g3
+    putStrLn $ "lhs = "++show (lhs g3)
+    putStrLn $ "rhs = "++show (rhs g3)
+    print b2
+    putStrLn "\nResove non-positive variables"
+    let (g4, b3) = resolveNonPositiveVars g3
+    putStr $ prettyPrintAsFormulas g4
+    putStrLn $ "lhs = "++show (lhs g4)
+    putStrLn $ "rhs = "++show (rhs g4)
+    print b3
+    putStrLn "\nResove unconstrained variables"
+    let (g5, b4) = resolveUnconstrainedVars g4
+    putStr $ prettyPrintAsFormulas g5
+    putStrLn $ "lhs = "++show (lhs g5)
+    putStrLn $ "rhs = "++show (rhs g5)
+    print b4
+    putStrLn "\nIntroduce slack variables"
+    let g6 = introduceSlackVariables g5
+    putStr $ prettyPrintAsFormulas g6
+    putStrLn $ "lhs = "++show (lhs g6)
+    putStrLn $ "rhs = "++show (rhs g6)
+    putStrLn "\n"
+    return (g6, b1 <> b2 <> b3 <> b4)
+
+
