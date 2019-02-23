@@ -3,8 +3,7 @@
  - Module      : Numeric.GLP
  - Description : Specifiy a General Linear Problem and transform to a Standardized LP
  - Copyright   : (c) Torsten Kemps-Benedix, 2019
- -
- - This module 'Numeric.GLP' specifiies a Generalized Linear Problem (or LP in short) and provides means to tranform this into a Standardized LP (see module 'Numeric.LP') that may be solved with e.g. the simplex solver in module 'Numeric.LP.Simplex'.
+ - This module 'Numeric.GLP' specifiies a [Generalized Linear Problem](https://en.wikipedia.org/wiki/Linear_programming) (or LP in short) and provides means to tranform this into a Standardized LP (see module 'Numeric.LP') that may be solved with e.g. the simplex solver in module 'Numeric.LP.Simplex'.
 -}
 module Numeric.GLP
 -- (GLP, Numeric.GLP.a, c, m1, m2, m3, dir, mkGLP, standardizeGLP)
@@ -24,7 +23,7 @@ import           Numeric.LinearAlgebra.Devel (modifyMatrix, runSTMatrix,
                                               thawMatrix, mapVectorWithIndex, fi)
 import           Numeric.LinearAlgebra       (vjoin, (|||), (===))
 
--- | This structure defines a General Linear Problem containing ≤
+-- | This record defines a General Linear Problem containing ≤
 -- and ≥ inequalities and == equalities. The sum of the numbers of
 -- inequalities ('m1' times ≤ and 'm2' times ≥) and equalities ('m3'
 -- times ==) must match one less than the number of
@@ -68,7 +67,7 @@ data GLP = GLP {
     dir :: Dir,           -- ^ Whether the objective function is to be maximized
                           -- or minimzed
     lhs, rhs :: Vector I  -- ^ Indices of left and right hand variables respectively.
-                          -- The original variables \x_1,\ldots,x_n\) have indices
+                          -- The original variables \(x_1,\ldots,x_n\) have indices
                           -- \(1,\ldots,n\), the slack variables get indices
                           -- \(n+1, \ldots, n+m_1+m_2+1\), and the auxiliary variables
                           -- finally get indices \(n+m_1+m_2+2, \ldots, n+m_1+m_2+m+2\).
